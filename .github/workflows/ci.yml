@@ -1,0 +1,66 @@
+name: CI Docker et publication GHCR
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Generer le verrou npm si absent
+        run: test -f package-lock.json || npm install --package-lock-only --ignore-scripts --no-audit
+      - name: Activer le cache npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Installer les dependances
+        run: npm ci
+      - name: Executer les tests
+        run: npm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construire l'image Docker
+        run: docker build -t tp-devops-api:1.0.0 .
+      - name: Smoke test
+        run: sh scripts/smoke-test.sh tp-devops-api:1.0.0
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Calculer le nom de l'image
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/tp-devops-api" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ github.ref_name }}
